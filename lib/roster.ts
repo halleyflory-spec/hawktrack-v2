@@ -1,0 +1,25 @@
+export const initialRoster = [
+  { displayName: "Bennett", studentNumber: "01", pin: "0001" },
+  { displayName: "Bethany A.", studentNumber: "02", pin: "0002" },
+  { displayName: "Sofia", studentNumber: "03", pin: "0003" },
+  { displayName: "Bethany B.", studentNumber: "04", pin: "0004" },
+  { displayName: "Henry", studentNumber: "05", pin: "0005" },
+  { displayName: "Emily", studentNumber: "06", pin: "0006" },
+  { displayName: "Lyric", studentNumber: "07", pin: "0007" },
+  { displayName: "Jordan", studentNumber: "08", pin: "0008" },
+  { displayName: "Mason", studentNumber: "09", pin: "0009" },
+  { displayName: "GG", studentNumber: "10", pin: "0010" },
+  { displayName: "Kevin", studentNumber: "11", pin: "0011" },
+  { displayName: "Za Riah", studentNumber: "12", pin: "0012" },
+  { displayName: "Ida", studentNumber: "13", pin: "0013" },
+  { displayName: "Anthony", studentNumber: "14", pin: "0014" },
+  { displayName: "Ben", studentNumber: "15", pin: "0015" },
+  { displayName: "Lillian", studentNumber: "16", pin: "0016" },
+  { displayName: "Oisin", studentNumber: "17", pin: "0017" },
+  { displayName: "Abel P.", studentNumber: "18", pin: "0018" },
+  { displayName: "Ceejay", studentNumber: "19", pin: "0019" },
+  { displayName: "Abel R.", studentNumber: "20", pin: "0020" },
+  { displayName: "Maple", studentNumber: "21", pin: "0021" },
+] as const;
+
+export const CLASS_ID = "flory-2026-2027";
