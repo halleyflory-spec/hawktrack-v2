@@ -17,17 +17,46 @@ export default function TeacherNav() {
       path: "/teacher",
       icon: "📅",
     },
+    {
+      label: "Checker",
+      path: "/teacher/checker",
+      icon: "✅",
+    },
+    {
+      label: "Behavior",
+      path: "/teacher/behavior",
+      icon: "⚡",
+    },
+    {
+      label: "Reports",
+      path: "/teacher/reports",
+      icon: "📊",
+    },
+    {
+      label: "Classes",
+      path: "/teacher/classes",
+      icon: "🏫",
+    },
   ];
+
+  function isActive(path: string) {
+    if (path === "/teacher") {
+      return pathname === "/teacher";
+    }
+
+    return pathname === path || pathname.startsWith(`${path}/`);
+  }
 
   return (
     <nav className="bg-blue-900 rounded-2xl p-2 mb-6">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {navItems.map((item) => {
-          const active = pathname === item.path;
+          const active = isActive(item.path);
 
           return (
             <button
               key={item.path}
+              type="button"
               onClick={() => router.push(item.path)}
               className={`px-5 py-3 rounded-xl font-bold transition ${
                 active

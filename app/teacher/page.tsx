@@ -172,9 +172,13 @@ export default function TeacherDashboard() {
         }
 
         try {
+          console.log("0. Checking teacher account...");
+
           const teacherSnapshot = await getDoc(
             doc(db, "teachers", user.uid)
           );
+
+          console.log("✅ Teacher account loaded");
 
           if (
             !teacherSnapshot.exists() ||
@@ -188,15 +192,71 @@ export default function TeacherDashboard() {
 
           setTeacher(user);
 
-          await loadStudents();
-          await loadGroups();
-          await loadPlannerItems();
-          await loadSupports();
-          await loadSupportProgress();
+          console.log("1. Loading students...");
+          try {
+            await loadStudents();
+            console.log("✅ Students loaded");
+          } catch (error) {
+            console.error("❌ STUDENTS FAILED:", error);
+            setMessage(
+              "HawkTrack could not load STUDENTS. Firestore permissions are blocking the students collection."
+            );
+            return;
+          }
+
+          console.log("2. Loading groups...");
+          try {
+            await loadGroups();
+            console.log("✅ Groups loaded");
+          } catch (error) {
+            console.error("❌ GROUPS FAILED:", error);
+            setMessage(
+              "HawkTrack could not load GROUPS. Firestore permissions are blocking the groups collection."
+            );
+            return;
+          }
+
+          console.log("3. Loading planner items...");
+          try {
+            await loadPlannerItems();
+            console.log("✅ Planner items loaded");
+          } catch (error) {
+            console.error("❌ PLANNER ITEMS FAILED:", error);
+            setMessage(
+              "HawkTrack could not load PLANNER ITEMS. Firestore permissions are blocking the plannerItems collection."
+            );
+            return;
+          }
+
+          console.log("4. Loading supports...");
+          try {
+            await loadSupports();
+            console.log("✅ Supports loaded");
+          } catch (error) {
+            console.error("❌ SUPPORTS FAILED:", error);
+            setMessage(
+              "HawkTrack could not load SUPPORTS. Firestore permissions are blocking the supports collection."
+            );
+            return;
+          }
+
+          console.log("5. Loading support progress...");
+          try {
+            await loadSupportProgress();
+            console.log("✅ Support progress loaded");
+          } catch (error) {
+            console.error("❌ SUPPORT PROGRESS FAILED:", error);
+            setMessage(
+              "HawkTrack could not load SUPPORT PROGRESS. Firestore permissions are blocking the supportProgress collection."
+            );
+            return;
+          }
+
+          console.log("🎉 WEEKLY PLANNER FULLY LOADED");
         } catch (error) {
-          console.error(error);
+          console.error("❌ TEACHER ACCOUNT CHECK FAILED:", error);
           setMessage(
-            "HawkTrack could not load the teacher dashboard."
+            "HawkTrack could not verify the teacher account."
           );
         } finally {
           setLoading(false);
@@ -268,33 +328,26 @@ export default function TeacherDashboard() {
       )
     );
 
-    const loadedSupports: Support[] =
-      snapshot.docs
-        .map((supportDoc): Support => {
-          const data = supportDoc.data();
+    const loadedSupports: Support[] = snapshot.docs
+      .map<Support>((supportDoc) => {
+        const data = supportDoc.data();
 
-          const supportType: Support["type"] =
+        return {
+          id: supportDoc.id,
+          studentId: data.studentId || "",
+          name: data.name || "Support",
+          type:
             data.type === "weeklyGoal"
               ? "weeklyGoal"
-              : "dailyAllowance";
-
-          return {
-            id: supportDoc.id,
-            studentId: data.studentId || "",
-            name: data.name || "Support",
-            type: supportType,
-            description: data.description || "",
-            target: Number(data.target || 1),
-            reward: data.reward || "",
-            studentCanTrack:
-              data.studentCanTrack !== false,
-            active:
-              data.active !== false,
-          };
-        })
-        .sort((a, b) =>
-          a.name.localeCompare(b.name)
-        );
+              : "dailyAllowance",
+          description: data.description || "",
+          target: Number(data.target || 1),
+          reward: data.reward || "",
+          studentCanTrack: data.studentCanTrack !== false,
+          active: data.active !== false,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     setSupports(loadedSupports);
   }
