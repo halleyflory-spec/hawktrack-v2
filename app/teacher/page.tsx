@@ -96,17 +96,6 @@ type SupportProgress = {
   count: number;
 };
 
-type BathroomTrip = {
-  id: string;
-  studentId: string;
-  supportId: string;
-  startedAtMs: number;
-  endedAtMs: number | null;
-  durationSeconds: number | null;
-  goalSeconds: number;
-  success: boolean | null;
-};
-
 export default function TeacherDashboard() {
   const router = useRouter();
 
@@ -116,8 +105,6 @@ export default function TeacherDashboard() {
   const [plannerItems, setPlannerItems] = useState<PlannerItem[]>([]);
   const [supports, setSupports] = useState<Support[]>([]);
   const [supportProgress, setSupportProgress] = useState<SupportProgress[]>([]);
-  const [bathroomTrips, setBathroomTrips] = useState<BathroomTrip[]>([]);
-  const [expandedBathroomSupportId, setExpandedBathroomSupportId] = useState<string | null>(null);
   const [supportUpdatingId, setSupportUpdatingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -268,13 +255,6 @@ export default function TeacherDashboard() {
             return;
           }
 
-          try {
-            await loadBathroomTrips();
-            console.log("✅ Bathroom trips loaded");
-          } catch (error) {
-            console.error("❌ BATHROOM TRIPS FAILED:", error);
-          }
-
           console.log("🎉 WEEKLY PLANNER FULLY LOADED");
         } catch (error) {
           console.error("❌ TEACHER ACCOUNT CHECK FAILED:", error);
@@ -344,30 +324,17 @@ export default function TeacherDashboard() {
   }
 
   async function loadSupports() {
-    // Load supports by student instead of classId so older supports that do not
-    // have classId still appear on the teacher side.
-    const studentSnapshot = await getDocs(
-      query(collection(db, "students"), where("classId", "==", CLASS_ID))
+    const snapshot = await getDocs(
+      query(
+        collection(db, "supports"),
+        where("classId", "==", CLASS_ID)
+      )
     );
 
-    const studentIds = studentSnapshot.docs
-      .filter((studentDoc) => studentDoc.data().active !== false)
-      .map((studentDoc) => studentDoc.id);
-
-    const supportDocs = [];
-    for (const currentStudentId of studentIds) {
-      const snapshot = await getDocs(
-        query(
-          collection(db, "supports"),
-          where("studentId", "==", currentStudentId)
-        )
-      );
-      supportDocs.push(...snapshot.docs);
-    }
-
-    const loadedSupports: Support[] = supportDocs
+    const loadedSupports: Support[] = snapshot.docs
       .map<Support>((supportDoc) => {
         const data = supportDoc.data();
+
         return {
           id: supportDoc.id,
           studentId: data.studentId || "",
@@ -392,77 +359,28 @@ export default function TeacherDashboard() {
   }
 
   async function loadSupportProgress() {
-    const studentSnapshot = await getDocs(
-      query(collection(db, "students"), where("classId", "==", CLASS_ID))
+    const snapshot = await getDocs(
+      query(
+        collection(db, "supportProgress"),
+        where("classId", "==", CLASS_ID)
+      )
     );
 
-    const studentIds = studentSnapshot.docs
-      .filter((studentDoc) => studentDoc.data().active !== false)
-      .map((studentDoc) => studentDoc.id);
+    const loadedProgress: SupportProgress[] = snapshot.docs.map(
+      (progressDoc) => {
+        const data = progressDoc.data();
 
-    const progressDocs = [];
-    for (const currentStudentId of studentIds) {
-      const snapshot = await getDocs(
-        query(
-          collection(db, "supportProgress"),
-          where("studentId", "==", currentStudentId)
-        )
-      );
-      progressDocs.push(...snapshot.docs);
-    }
-
-    const loadedProgress: SupportProgress[] = progressDocs.map((progressDoc) => {
-      const data = progressDoc.data();
-      return {
-        id: progressDoc.id,
-        studentId: data.studentId || "",
-        supportId: data.supportId || "",
-        periodKey: data.periodKey || "",
-        count: Number(data.count) || 0,
-      };
-    });
+        return {
+          id: progressDoc.id,
+          studentId: data.studentId || "",
+          supportId: data.supportId || "",
+          periodKey: data.periodKey || "",
+          count: Number(data.count) || 0,
+        };
+      }
+    );
 
     setSupportProgress(loadedProgress);
-  }
-
-  async function loadBathroomTrips() {
-    const snapshot = await getDocs(
-      query(collection(db, "bathroomTrips"), where("classId", "==", CLASS_ID))
-    );
-
-    const loadedTrips: BathroomTrip[] = snapshot.docs.map((tripDoc) => {
-      const data = tripDoc.data();
-      return {
-        id: tripDoc.id,
-        studentId: data.studentId || "",
-        supportId: data.supportId || "",
-        startedAtMs: Number(data.startedAtMs) || 0,
-        endedAtMs: data.endedAtMs == null ? null : Number(data.endedAtMs),
-        durationSeconds:
-          data.durationSeconds == null ? null : Number(data.durationSeconds),
-        goalSeconds: Number(data.goalSeconds) || 300,
-        success: typeof data.success === "boolean" ? data.success : null,
-      };
-    });
-
-    setBathroomTrips(loadedTrips);
-  }
-
-  function formatBathroomClock(ms: number) {
-    if (!ms) return "—";
-    return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  }
-
-  function formatBathroomDate(ms: number) {
-    if (!ms) return "—";
-    return new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
-  }
-
-  function formatBathroomDuration(seconds: number | null) {
-    if (seconds == null) return "In bathroom";
-    const minutes = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${minutes}:${String(secs).padStart(2, "0")}`;
   }
 
   async function loadPlannerItems() {
@@ -939,7 +857,16 @@ export default function TeacherDashboard() {
     setSupportStudentCanTrack(support.studentCanTrack);
     setSupportActive(support.active);
     setEditingSupportId(support.id);
-    setSupportMessage("");
+    setSupportMessage(`Editing "${support.name}"`);
+
+    window.setTimeout(() => {
+      document
+        .getElementById("support-editor")
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+    }, 0);
   }
 
   async function toggleSupportActive(support: Support) {
@@ -964,6 +891,90 @@ export default function TeacherDashboard() {
     } catch (error) {
       console.error(error);
       setSupportMessage("HawkTrack couldn't change that support.");
+    }
+  }
+
+
+  async function deleteSupport(support: Support) {
+    const okay = window.confirm(
+      `Permanently delete "${support.name}"? This will also remove its progress${
+        support.type === "bathroomTimer"
+          ? " and bathroom timer history"
+          : ""
+      }. This cannot be undone.`
+    );
+
+    if (!okay) {
+      return;
+    }
+
+    try {
+      setSupportUpdatingId(support.id);
+      setSupportMessage("");
+
+      const batch = writeBatch(db);
+
+      batch.delete(
+        doc(db, "supports", support.id)
+      );
+
+      const progressSnapshot = await getDocs(
+        query(
+          collection(db, "supportProgress"),
+          where("supportId", "==", support.id)
+        )
+      );
+
+      progressSnapshot.docs.forEach((progressDoc) => {
+        batch.delete(
+          doc(db, "supportProgress", progressDoc.id)
+        );
+      });
+
+      if (support.type === "bathroomTimer") {
+        const tripSnapshot = await getDocs(
+          query(
+            collection(db, "bathroomTrips"),
+            where("supportId", "==", support.id)
+          )
+        );
+
+        tripSnapshot.docs.forEach((tripDoc) => {
+          batch.delete(
+            doc(db, "bathroomTrips", tripDoc.id)
+          );
+        });
+      }
+
+      await batch.commit();
+
+      setSupports((current) =>
+        current.filter(
+          (item) => item.id !== support.id
+        )
+      );
+
+      setSupportProgress((current) =>
+        current.filter(
+          (item) => item.supportId !== support.id
+        )
+      );
+
+      if (editingSupportId === support.id) {
+        resetSupportForm();
+      }
+
+      setSupportMessage(
+        `"${support.name}" was permanently deleted.`
+      );
+    } catch (error) {
+      console.error(error);
+
+      setSupportMessage(
+        "HawkTrack couldn't delete that support."
+      );
+    } finally {
+      setSupportUpdatingId(null);
     }
   }
 
@@ -2030,7 +2041,10 @@ export default function TeacherDashboard() {
         )}
 
         {showSupports && (
-          <section className="bg-white border-2 border-amber-300 rounded-3xl p-6 md:p-8 mb-7">
+          <section
+            id="support-editor"
+            className="bg-white border-2 border-amber-300 rounded-3xl p-6 md:p-8 mb-7 scroll-mt-4"
+          >
 
             <div className="flex justify-between gap-4 mb-6">
               <div>
@@ -2197,6 +2211,17 @@ export default function TeacherDashboard() {
                     </span>
                   </label>
                 </div>
+
+                {editingSupportId && (
+                  <div className="mt-5 bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+                    <p className="font-bold text-blue-900">
+                      ✏️ Editing this support
+                    </p>
+                    <p className="text-sm text-blue-700 mt-1">
+                      Change any fields above, then click Update Support.
+                    </p>
+                  </div>
+                )}
 
                 <div className="flex flex-wrap gap-3 mt-5">
                   <button
@@ -2378,113 +2403,6 @@ export default function TeacherDashboard() {
                                   );
                                 })()}
 
-                                {support.type === "bathroomTimer" && (() => {
-                                  const trips = bathroomTrips
-                                    .filter((trip) => trip.supportId === support.id)
-                                    .sort((a, b) => b.startedAtMs - a.startedAtMs);
-                                  const completedTrips = trips.filter(
-                                    (trip) => trip.durationSeconds != null
-                                  );
-                                  const averageSeconds = completedTrips.length
-                                    ? Math.round(
-                                        completedTrips.reduce(
-                                          (sum, trip) => sum + (trip.durationSeconds || 0),
-                                          0
-                                        ) / completedTrips.length
-                                      )
-                                    : null;
-                                  const successfulTrips = completedTrips.filter(
-                                    (trip) => trip.success === true
-                                  ).length;
-                                  const overGoalTrips = completedTrips.filter(
-                                    (trip) => trip.success === false
-                                  ).length;
-                                  const expanded = expandedBathroomSupportId === support.id;
-
-                                  return (
-                                    <div className="mb-4">
-                                      <button
-                                        onClick={() =>
-                                          setExpandedBathroomSupportId(expanded ? null : support.id)
-                                        }
-                                        className="w-full bg-sky-50 border-2 border-sky-200 text-blue-900 rounded-xl px-4 py-3 font-bold"
-                                      >
-                                        {expanded ? "Hide Bathroom Log" : `View Bathroom Log (${trips.length})`}
-                                      </button>
-
-                                      {expanded && (
-                                        <div className="mt-3 border-2 border-sky-100 rounded-2xl p-4 bg-white">
-                                          <div className="grid grid-cols-3 gap-2 mb-4 text-center">
-                                            <div className="bg-sky-50 rounded-xl p-3">
-                                              <p className="text-xs text-gray-500 font-bold">AVERAGE</p>
-                                              <p className="font-bold text-blue-900">
-                                                {averageSeconds == null
-                                                  ? "—"
-                                                  : formatBathroomDuration(averageSeconds)}
-                                              </p>
-                                            </div>
-                                            <div className="bg-green-50 rounded-xl p-3">
-                                              <p className="text-xs text-gray-500 font-bold">ON TIME</p>
-                                              <p className="font-bold text-green-700">{successfulTrips}</p>
-                                            </div>
-                                            <div className="bg-red-50 rounded-xl p-3">
-                                              <p className="text-xs text-gray-500 font-bold">OVER GOAL</p>
-                                              <p className="font-bold text-red-700">{overGoalTrips}</p>
-                                            </div>
-                                          </div>
-
-                                          {trips.length === 0 ? (
-                                            <p className="text-sm text-gray-500 text-center py-3">
-                                              No bathroom trips recorded yet.
-                                            </p>
-                                          ) : (
-                                            <div className="overflow-x-auto">
-                                              <table className="w-full text-sm">
-                                                <thead>
-                                                  <tr className="text-left text-gray-500 border-b">
-                                                    <th className="py-2 pr-3">Date</th>
-                                                    <th className="py-2 pr-3">Left</th>
-                                                    <th className="py-2 pr-3">Back</th>
-                                                    <th className="py-2 pr-3">Time Gone</th>
-                                                    <th className="py-2">Result</th>
-                                                  </tr>
-                                                </thead>
-                                                <tbody>
-                                                  {trips.map((trip) => (
-                                                    <tr key={trip.id} className="border-b last:border-0">
-                                                      <td className="py-2 pr-3">
-                                                        {formatBathroomDate(trip.startedAtMs)}
-                                                      </td>
-                                                      <td className="py-2 pr-3">
-                                                        {formatBathroomClock(trip.startedAtMs)}
-                                                      </td>
-                                                      <td className="py-2 pr-3">
-                                                        {trip.endedAtMs
-                                                          ? formatBathroomClock(trip.endedAtMs)
-                                                          : "Still out"}
-                                                      </td>
-                                                      <td className="py-2 pr-3 font-semibold">
-                                                        {formatBathroomDuration(trip.durationSeconds)}
-                                                      </td>
-                                                      <td className="py-2 font-bold">
-                                                        {trip.success === true
-                                                          ? "✅ On time"
-                                                          : trip.success === false
-                                                          ? "❌ Over goal"
-                                                          : "⏱ Running"}
-                                                      </td>
-                                                    </tr>
-                                                  ))}
-                                                </tbody>
-                                              </table>
-                                            </div>
-                                          )}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })()}
-
                                 <div className="flex flex-wrap gap-3">
                                 <button
                                   onClick={() => editSupport(support)}
@@ -2500,6 +2418,14 @@ export default function TeacherDashboard() {
                                   }`}
                                 >
                                   {support.active ? "Deactivate" : "Reactivate"}
+                                </button>
+
+                                <button
+                                  onClick={() => deleteSupport(support)}
+                                  disabled={supportUpdatingId === support.id}
+                                  className="text-red-700 font-bold underline disabled:opacity-40"
+                                >
+                                  Delete Permanently
                                 </button>
                                 </div>
                               </div>
