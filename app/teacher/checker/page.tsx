@@ -10,6 +10,7 @@ import {
   getDocs,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
   writeBatch,
@@ -494,6 +495,71 @@ export default function TeacherCheckerPage() {
     }
   }
 
+  async function overrideStatus(
+    item: StatusRecord,
+    newStatus: "todo" | "turnedIn" | "verified" | "excused"
+  ) {
+    try {
+      setWorkingId(item.statusId);
+      setMessage("");
+
+      const updates: Record<string, unknown> = {
+        status: newStatus,
+        feedback: "",
+        teacherOverride: true,
+        teacherOverrideAt: serverTimestamp(),
+        teacherOverrideBy: auth.currentUser?.uid || "",
+      };
+
+      if (newStatus === "verified") {
+        updates.verifiedAt = serverTimestamp();
+        updates.verifiedBy = auth.currentUser?.uid || "";
+      } else {
+        updates.verifiedAt = null;
+        updates.verifiedBy = "";
+      }
+
+      await updateDoc(
+        doc(db, "studentAssignmentStatus", item.statusId),
+        updates
+      );
+
+      setStatuses((current) =>
+        current.map((status) =>
+          status.statusId === item.statusId
+            ? { ...status, status: newStatus, feedback: "" }
+            : status
+        )
+      );
+
+      setFeedbackById((current) => ({
+        ...current,
+        [item.statusId]: "",
+      }));
+
+      setSelectedStatusIds((current) =>
+        current.filter((id) => id !== item.statusId)
+      );
+
+      setMessage(
+        `${item.studentName}'s assignment was changed to ${
+          newStatus === "todo"
+            ? "To Do"
+            : newStatus === "turnedIn"
+            ? "Waiting"
+            : newStatus === "verified"
+            ? "Verified"
+            : "Excused"
+        }.`
+      );
+    } catch (error) {
+      console.error(error);
+      setMessage("HawkTrack couldn't change that assignment status.");
+    } finally {
+      setWorkingId(null);
+    }
+  }
+
   async function handleLogout() {
     await signOut(auth);
     router.push("/teacher/login");
@@ -805,34 +871,40 @@ export default function TeacherCheckerPage() {
                               </div>
 
                               <div className="flex flex-col gap-2">
-                                {isWaiting ? (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        verifyItem(item)
-                                      }
-                                      disabled={isWorking}
-                                      className="bg-green-600 text-white rounded-xl px-4 py-3 font-bold disabled:opacity-50"
-                                    >
-                                      ✓ Verify
-                                    </button>
+                                <label className="text-xs font-bold uppercase text-blue-700">
+                                  Teacher Override
+                                </label>
 
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        sendBackItem(item)
-                                      }
-                                      disabled={isWorking}
-                                      className="bg-yellow-400 text-blue-950 rounded-xl px-4 py-3 font-bold disabled:opacity-50"
-                                    >
-                                      ↩ Send Back
-                                    </button>
-                                  </>
-                                ) : (
-                                  <span className="text-sm text-gray-500 text-center py-3">
-                                    No checker action needed
-                                  </span>
+                                <select
+                                  value={item.status}
+                                  disabled={isWorking}
+                                  onChange={(e) =>
+                                    overrideStatus(
+                                      item,
+                                      e.target.value as
+                                        | "todo"
+                                        | "turnedIn"
+                                        | "verified"
+                                        | "excused"
+                                    )
+                                  }
+                                  className="border-2 border-blue-300 bg-white text-blue-950 rounded-xl px-3 py-3 font-bold disabled:opacity-50"
+                                >
+                                  <option value="todo">To Do</option>
+                                  <option value="turnedIn">Waiting</option>
+                                  <option value="verified">✓ Verified</option>
+                                  <option value="excused">Excused</option>
+                                </select>
+
+                                {isWaiting && (
+                                  <button
+                                    type="button"
+                                    onClick={() => sendBackItem(item)}
+                                    disabled={isWorking}
+                                    className="bg-yellow-400 text-blue-950 rounded-xl px-4 py-3 font-bold disabled:opacity-50"
+                                  >
+                                    ↩ Send Back With Note
+                                  </button>
                                 )}
                               </div>
                             </div>

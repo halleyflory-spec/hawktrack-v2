@@ -9,6 +9,8 @@ import {
   getDoc,
   getDocs,
   query,
+  serverTimestamp,
+  updateDoc,
   where,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
@@ -45,6 +47,7 @@ export default function GradebookPage() {
   const [statuses, setStatuses] = useState<StatusRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [workingId, setWorkingId] = useState<string | null>(null);
 
   const [subjectFilter, setSubjectFilter] =
     useState("All Subjects");
@@ -272,6 +275,59 @@ export default function GradebookPage() {
             ),
     };
   }, [statuses, filteredAssignments]);
+
+  async function overrideGradebookStatus(
+    statusRecord: StatusRecord,
+    newStatus: "todo" | "turnedIn" | "verified" | "excused"
+  ) {
+    try {
+      setWorkingId(statusRecord.id);
+      setMessage("");
+
+      const updates: Record<string, unknown> = {
+        status: newStatus,
+        teacherOverride: true,
+        teacherOverrideAt: serverTimestamp(),
+        teacherOverrideBy: auth.currentUser?.uid || "",
+      };
+
+      if (newStatus === "verified") {
+        updates.verifiedAt = serverTimestamp();
+        updates.verifiedBy = auth.currentUser?.uid || "";
+      } else {
+        updates.verifiedAt = null;
+        updates.verifiedBy = "";
+      }
+
+      await updateDoc(
+        doc(
+          db,
+          "studentAssignmentStatus",
+          statusRecord.id
+        ),
+        updates
+      );
+
+      setStatuses((current) =>
+        current.map((item) =>
+          item.id === statusRecord.id
+            ? {
+                ...item,
+                status: newStatus,
+              }
+            : item
+        )
+      );
+    } catch (error) {
+      console.error(error);
+
+      setMessage(
+        "HawkTrack couldn't change that assignment status."
+      );
+    } finally {
+      setWorkingId(null);
+    }
+  }
 
   async function handleLogout() {
     await signOut(auth);
@@ -524,18 +580,54 @@ export default function GradebookPage() {
                                 className="border border-blue-100 px-3 py-3 text-center"
                               >
                                 {!status ? (
-                                  <span className="text-gray-300">
+                                  <span
+                                    className="text-gray-300"
+                                    title="This assignment was not assigned to this student."
+                                  >
                                     —
                                   </span>
                                 ) : (
-                                  <GradebookStatus
-                                    status={
-                                      status.status
+                                  <select
+                                    value={status.status}
+                                    disabled={workingId === status.id}
+                                    onChange={(e) =>
+                                      overrideGradebookStatus(
+                                        status,
+                                        e.target.value as
+                                          | "todo"
+                                          | "turnedIn"
+                                          | "verified"
+                                          | "excused"
+                                      )
                                     }
-                                    dueDate={
-                                      assignment.dueDate
-                                    }
-                                  />
+                                    aria-label={`Change ${student.displayName}'s status for ${assignment.title}`}
+                                    className={`rounded-lg px-2 py-2 text-xs font-bold border-2 cursor-pointer disabled:opacity-50 ${
+                                      status.status === "verified"
+                                        ? "bg-green-100 text-green-800 border-green-200"
+                                        : status.status === "turnedIn"
+                                        ? "bg-yellow-100 text-yellow-800 border-yellow-200"
+                                        : status.status === "excused"
+                                        ? "bg-gray-200 text-gray-700 border-gray-300"
+                                        : assignment.dueDate &&
+                                          assignment.dueDate <
+                                            formatDateForInput(new Date())
+                                        ? "bg-red-100 text-red-700 border-red-200"
+                                        : "bg-blue-100 text-blue-800 border-blue-200"
+                                    }`}
+                                  >
+                                    <option value="todo">
+                                      To Do
+                                    </option>
+                                    <option value="turnedIn">
+                                      Waiting
+                                    </option>
+                                    <option value="verified">
+                                      ✓ Verified
+                                    </option>
+                                    <option value="excused">
+                                      Excused
+                                    </option>
+                                  </select>
                                 )}
                               </td>
                             );
