@@ -79,7 +79,7 @@ type Support = {
   id: string;
   studentId: string;
   name: string;
-  type: "dailyAllowance" | "weeklyGoal" | "bathroomTimer";
+  type: "dailyAllowance" | "weeklyGoal" | "bathroomTimer" | "job";
   description: string;
   target: number;
   reward: string;
@@ -151,7 +151,7 @@ export default function TeacherDashboard() {
   const [supportStudentId, setSupportStudentId] = useState("");
   const [supportName, setSupportName] = useState("");
   const [supportType, setSupportType] =
-    useState<"dailyAllowance" | "weeklyGoal" | "bathroomTimer">("dailyAllowance");
+    useState<"dailyAllowance" | "weeklyGoal" | "bathroomTimer" | "job">("dailyAllowance");
   const [supportDescription, setSupportDescription] = useState("");
   const [supportTarget, setSupportTarget] = useState(1);
   const [supportReward, setSupportReward] = useState("");
@@ -344,6 +344,8 @@ export default function TeacherDashboard() {
               ? "weeklyGoal"
               : data.type === "bathroomTimer"
               ? "bathroomTimer"
+              : data.type === "job"
+              ? "job"
               : "dailyAllowance",
           description: data.description || "",
           target: Number(data.target || 1),
@@ -2107,13 +2109,14 @@ export default function TeacherDashboard() {
                   value={supportType}
                   onChange={(e) =>
                     setSupportType(
-                      e.target.value as "dailyAllowance" | "weeklyGoal" | "bathroomTimer"
+                      e.target.value as "dailyAllowance" | "weeklyGoal" | "bathroomTimer" | "job"
                     )
                   }
                   className="w-full border-2 border-blue-200 rounded-xl p-3 bg-white text-black"
                 >
                   <option value="dailyAllowance">Daily Allowance</option>
                   <option value="weeklyGoal">Weekly Goal / Reward</option>
+                  <option value="job">💼 Job</option>
                   <option value="bathroomTimer">Bathroom Timer Goal</option>
                 </select>
 
@@ -2122,6 +2125,8 @@ export default function TeacherDashboard() {
                     ? "How many are allowed each day?"
                     : supportType === "bathroomTimer"
                     ? "How many on-time bathroom trips earn the reward?"
+                    : supportType === "job"
+                    ? "How many times should this job be completed this week?"
                     : "How many times should they complete it this week?"}
                 </label>
 
@@ -2167,12 +2172,14 @@ export default function TeacherDashboard() {
                       ? "Example: Use when you need a movement break."
                       : supportType === "bathroomTimer"
                       ? "Example: Start the timer when you leave and tap I’m Back when you return."
+                      : supportType === "job"
+                      ? "Example: Feed the gecko before dismissal."
                       : "Example: Turn in your planner each school day."
                   }
                   className="w-full border-2 border-blue-200 rounded-xl p-3 text-black min-h-24"
                 />
 
-                {(supportType === "weeklyGoal" || supportType === "bathroomTimer") && (
+                {(supportType === "weeklyGoal" || supportType === "job" || supportType === "bathroomTimer") && (
                   <>
                     <label className="block font-bold text-blue-900 mt-5 mb-2">
                       Reward
@@ -2302,6 +2309,8 @@ export default function TeacherDashboard() {
                                     ? `${support.target} per day`
                                     : support.type === "bathroomTimer"
                                     ? `${support.goalMinutes} minute goal • ${support.target} successes for reward`
+                                    : support.type === "job"
+                                    ? `💼 ${support.target} job completion${support.target === 1 ? "" : "s"} per week`
                                     : `${support.target} times per week`}
                                 </p>
 
@@ -2349,6 +2358,8 @@ export default function TeacherDashboard() {
                                           ? "Today's Progress"
                                           : support.type === "bathroomTimer"
                                           ? "Current Reward Cycle"
+                                          : support.type === "job"
+                                          ? "This Week's Job Progress"
                                           : "This Week's Progress"}
                                       </p>
 
@@ -2396,6 +2407,8 @@ export default function TeacherDashboard() {
                                             ? "Reset Today"
                                             : support.type === "bathroomTimer"
                                             ? "Reset Reward Cycle"
+                                            : support.type === "job"
+                                            ? "Reset Job Week"
                                             : "Reset Week"}
                                         </button>
                                       </div>

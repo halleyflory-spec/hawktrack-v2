@@ -53,7 +53,7 @@ type Support = {
   id: string;
   studentId: string;
   name: string;
-  type: "dailyAllowance" | "weeklyGoal" | "bathroomTimer";
+  type: "dailyAllowance" | "weeklyGoal" | "bathroomTimer" | "job";
   description: string;
   target: number;
   reward: string;
@@ -440,6 +440,8 @@ export default function StudentPage() {
               ? "weeklyGoal"
               : data.type === "bathroomTimer"
               ? "bathroomTimer"
+              : data.type === "job"
+              ? "job"
               : "dailyAllowance",
           description: data.description || "",
           target: Number(data.target) || 1,
@@ -669,9 +671,18 @@ export default function StudentPage() {
     if (support.type === "dailyAllowance") {
       return formatDateForInput(new Date());
     }
+
     if (support.type === "bathroomTimer") {
       return "currentCycle";
     }
+
+    // Weekly goals and jobs automatically start a fresh total every Monday.
+    // The support itself is NOT changed or deleted; only the periodKey changes,
+    // so older weekly totals remain available as history.
+    if (support.type === "weeklyGoal" || support.type === "job") {
+      return getWeekStartString();
+    }
+
     return getWeekStartString();
   }
 
@@ -1694,7 +1705,7 @@ export default function StudentPage() {
                     <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                       <div>
                         <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
-                          Weekly Reward Goal
+                          {support.type === "job" ? "💼 Weekly Job" : "Weekly Reward Goal"}
                         </p>
 
                         <h3 className="text-xl font-bold text-blue-950 mt-1">
@@ -1773,7 +1784,9 @@ export default function StudentPage() {
 
                     {complete && (
                       <div className="mt-5 bg-green-100 rounded-xl p-4 text-green-800 font-bold text-center">
-                        🎉 You reached your goal this week!
+                        {support.type === "job"
+                          ? "🎉 Job goal complete for this week!"
+                          : "🎉 You reached your goal this week!"}
                         {support.reward
                           ? ` Reward: ${support.reward}`
                           : ""}
