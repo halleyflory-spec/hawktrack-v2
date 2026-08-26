@@ -125,6 +125,9 @@ export default function StudentPage() {
   const [message, setMessage] =
     useState("");
 
+  const [showVerifiedAssignments, setShowVerifiedAssignments] =
+    useState(false);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
       auth,
@@ -986,6 +989,22 @@ export default function StudentPage() {
     router.push("/");
   }
 
+  const activeSchoolwork = useMemo(
+    () =>
+      schoolwork.filter(
+        (item) => item.status !== "verified"
+      ),
+    [schoolwork]
+  );
+
+  const verifiedSchoolwork = useMemo(
+    () =>
+      schoolwork.filter(
+        (item) => item.status === "verified"
+      ),
+    [schoolwork]
+  );
+
   const completion =
     useMemo(() => {
       const countable =
@@ -1123,7 +1142,7 @@ export default function StudentPage() {
 
           </div>
 
-          {schoolwork.length ===
+          {activeSchoolwork.length ===
           0 ? (
             <div className="border-2 border-dashed border-blue-200 rounded-2xl p-8 text-center">
 
@@ -1139,7 +1158,7 @@ export default function StudentPage() {
           ) : (
             <div className="space-y-4">
 
-              {schoolwork.map(
+              {activeSchoolwork.map(
                 (item) => {
                   const overdue =
                     isOverdue(
@@ -1282,6 +1301,75 @@ export default function StudentPage() {
                 }
               )}
 
+            </div>
+          )}
+
+          {verifiedSchoolwork.length > 0 && (
+            <div className="mt-5">
+              <button
+                type="button"
+                onClick={() =>
+                  setShowVerifiedAssignments(
+                    (current) => !current
+                  )
+                }
+                className="w-full bg-green-50 border-2 border-green-300 rounded-2xl p-4 flex items-center justify-between gap-4 text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">
+                    📁
+                  </span>
+
+                  <div>
+                    <p className="font-bold text-green-800 text-lg">
+                      Verified Assignments
+                    </p>
+
+                    <p className="text-sm text-green-700">
+                      {verifiedSchoolwork.length} completed this week
+                    </p>
+                  </div>
+                </div>
+
+                <span className="text-green-800 font-bold text-xl">
+                  {showVerifiedAssignments ? "▲" : "▼"}
+                </span>
+              </button>
+
+              {showVerifiedAssignments && (
+                <div className="mt-3 space-y-3 bg-green-50/50 border-2 border-green-100 rounded-2xl p-4">
+                  {verifiedSchoolwork.map((item) => (
+                    <div
+                      key={item.statusId}
+                      className="bg-white border-2 border-green-200 rounded-2xl p-4"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-bold uppercase text-green-700">
+                            {item.subject}
+                          </p>
+
+                          <h3 className="text-lg font-bold text-blue-950 mt-1">
+                            {item.title}
+                          </h3>
+
+                          {item.description && (
+                            <p className="text-sm text-gray-600 mt-2">
+                              {item.description}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="shrink-0">
+                          <span className="inline-block bg-green-100 text-green-800 rounded-full px-3 py-2 font-bold">
+                            ✓ Verified
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
