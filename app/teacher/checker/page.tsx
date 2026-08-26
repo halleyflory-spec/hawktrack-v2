@@ -2,10 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  onAuthStateChanged,
-  signOut,
-} from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
 import {
   collection,
   doc,
@@ -15,8 +12,10 @@ import {
   serverTimestamp,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import TeacherNav from "@/app/teacher/components/TeacherNav";
 
 const CLASS_ID = "flory-2026-2027";
 
@@ -31,31 +30,31 @@ type Assignment = {
   subject: string;
   dueDate: string;
   showDate: string;
+  archived: boolean;
 };
 
-type WaitingItem = {
+type StatusRecord = {
   statusId: string;
   studentId: string;
   studentName: string;
   assignmentId: string;
-  assignmentTitle: string;
-  subject: string;
-  dueDate: string;
-  showDate: string;
+  status: "todo" | "turnedIn" | "verified" | "excused";
   feedback: string;
+};
+
+type AssignmentGroup = {
+  assignment: Assignment;
+  students: StatusRecord[];
 };
 
 export default function TeacherCheckerPage() {
   const router = useRouter();
 
-  const [items, setItems] =
-    useState<WaitingItem[]>([]);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [message, setMessage] =
-    useState("");
+  const [students, setStudents] = useState<Student[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [statuses, setStatuses] = useState<StatusRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
 
   const [feedbackById, setFeedbackById] =
     useState<Record<string, string>>({});
@@ -63,8 +62,14 @@ export default function TeacherCheckerPage() {
   const [workingId, setWorkingId] =
     useState<string | null>(null);
 
-  const [itemMessageById, setItemMessageById] =
-    useState<Record<string, string>>({});
+  const [selectedStatusIds, setSelectedStatusIds] =
+    useState<string[]>([]);
+
+  const [subjectFilter, setSubjectFilter] =
+    useState("All Subjects");
+
+  const [showOnlyWaiting, setShowOnlyWaiting] =
+    useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(
@@ -77,11 +82,7 @@ export default function TeacherCheckerPage() {
 
         try {
           const teacherSnapshot = await getDoc(
-            doc(
-              db,
-              "teachers",
-              user.uid
-            )
+            doc(db, "teachers", user.uid)
           );
 
           if (
@@ -90,20 +91,15 @@ export default function TeacherCheckerPage() {
             teacherSnapshot.data().role !== "teacher"
           ) {
             await signOut(auth);
-
-            router.push(
-              "/teacher/login"
-            );
-
+            router.push("/teacher/login");
             return;
           }
 
-          await loadWaitingItems();
+          await loadCheckerData();
         } catch (error) {
           console.error(error);
-
           setMessage(
-            "HawkTrack couldn't load the checker inbox."
+            "HawkTrack couldn't load the checker page."
           );
         } finally {
           setLoading(false);
@@ -114,251 +110,210 @@ export default function TeacherCheckerPage() {
     return () => unsubscribe();
   }, [router]);
 
-  async function loadWaitingItems() {
-    try {
-      const studentSnapshot = await getDocs(
-        query(
-          collection(
-            db,
-            "students"
-          ),
-          where(
-            "classId",
-            "==",
-            CLASS_ID
-          )
+  async function loadCheckerData() {
+    const studentSnapshot = await getDocs(
+      query(
+        collection(db, "students"),
+        where("classId", "==", CLASS_ID)
+      )
+    );
+
+    const loadedStudents: Student[] =
+      studentSnapshot.docs
+        .filter(
+          (studentDoc) =>
+            studentDoc.data().active !== false
         )
-      );
-
-      const studentMap: Record<
-        string,
-        Student
-      > = {};
-
-      studentSnapshot.docs.forEach(
-        (studentDoc) => {
-          const data =
-            studentDoc.data();
-
-          studentMap[
-            studentDoc.id
-          ] = {
-            id:
-              studentDoc.id,
-
-            displayName:
-              data.displayName ||
-              "Student",
-          };
-        }
-      );
-
-      const assignmentSnapshot =
-        await getDocs(
-          query(
-            collection(
-              db,
-              "assignments"
-            ),
-            where(
-              "classId",
-              "==",
-              CLASS_ID
-            )
+        .map((studentDoc) => ({
+          id: studentDoc.id,
+          displayName:
+            studentDoc.data().displayName ||
+            "Student",
+        }))
+        .sort((a, b) =>
+          a.displayName.localeCompare(
+            b.displayName
           )
         );
 
-      const assignmentMap: Record<
-        string,
-        Assignment
-      > = {};
+    const studentMap: Record<string, string> = {};
 
-      assignmentSnapshot.docs.forEach(
-        (assignmentDoc) => {
-          const data =
-            assignmentDoc.data();
+    loadedStudents.forEach((student) => {
+      studentMap[student.id] = student.displayName;
+    });
 
-          assignmentMap[
-            assignmentDoc.id
-          ] = {
-            id:
-              assignmentDoc.id,
+    const assignmentSnapshot = await getDocs(
+      query(
+        collection(db, "assignments"),
+        where("classId", "==", CLASS_ID)
+      )
+    );
 
-            title:
-              data.title ||
-              "Assignment",
+    const loadedAssignments: Assignment[] =
+      assignmentSnapshot.docs
+        .map((assignmentDoc) => {
+          const data = assignmentDoc.data();
 
-            subject:
-              data.subject ||
-              "",
-
-            dueDate:
-              data.dueDate ||
-              "",
-
-            showDate:
-              data.showDate ||
-              "",
+          return {
+            id: assignmentDoc.id,
+            title: data.title || "Assignment",
+            subject: data.subject || "",
+            dueDate: data.dueDate || "",
+            showDate: data.showDate || "",
+            archived: data.archived === true,
           };
-        }
-      );
+        })
+        .filter((assignment) => !assignment.archived)
+        .sort((a, b) => {
+          const dateCompare =
+            b.showDate.localeCompare(a.showDate);
 
-      const statusSnapshot =
-        await getDocs(
-          query(
-            collection(
-              db,
-              "studentAssignmentStatus"
-            ),
-            where(
-              "classId",
-              "==",
-              CLASS_ID
-            ),
-            where(
-              "status",
-              "==",
-              "turnedIn"
-            )
+          if (dateCompare !== 0) {
+            return dateCompare;
+          }
+
+          return a.title.localeCompare(b.title);
+        });
+
+    const statusSnapshot = await getDocs(
+      query(
+        collection(
+          db,
+          "studentAssignmentStatus"
+        ),
+        where("classId", "==", CLASS_ID)
+      )
+    );
+
+    const loadedStatuses: StatusRecord[] =
+      statusSnapshot.docs
+        .map((statusDoc) => {
+          const data = statusDoc.data();
+
+          return {
+            statusId: statusDoc.id,
+            studentId: data.studentId || "",
+            studentName:
+              studentMap[data.studentId] ||
+              "Unknown Student",
+            assignmentId:
+              data.assignmentId || "",
+            status:
+              data.status || "todo",
+            feedback:
+              data.feedback || "",
+          };
+        })
+        .sort((a, b) =>
+          a.studentName.localeCompare(
+            b.studentName
           )
         );
 
-      const loadedItems: WaitingItem[] =
-        statusSnapshot.docs
-          .map((statusDoc) => {
-            const data =
-              statusDoc.data();
+    const initialFeedback:
+      Record<string, string> = {};
 
-            const student =
-              studentMap[
-                data.studentId
-              ];
+    loadedStatuses.forEach((status) => {
+      initialFeedback[status.statusId] =
+        status.feedback || "";
+    });
 
-            const assignment =
-              assignmentMap[
-                data.assignmentId
-              ];
+    setStudents(loadedStudents);
+    setAssignments(loadedAssignments);
+    setStatuses(loadedStatuses);
+    setFeedbackById(initialFeedback);
+  }
 
-            if (
-              !student ||
-              !assignment
-            ) {
-              return null;
-            }
+  const subjects = useMemo(() => {
+    return [
+      "All Subjects",
+      ...Array.from(
+        new Set(
+          assignments
+            .map((assignment) => assignment.subject)
+            .filter(Boolean)
+        )
+      ).sort(),
+    ];
+  }, [assignments]);
 
-            return {
-              statusId:
-                statusDoc.id,
-
-              studentId:
-                student.id,
-
-              studentName:
-                student.displayName,
-
-              assignmentId:
-                assignment.id,
-
-              assignmentTitle:
-                assignment.title,
-
-              subject:
-                assignment.subject,
-
-              dueDate:
-                assignment.dueDate,
-
-              showDate:
-                assignment.showDate,
-
-              feedback:
-                data.feedback ||
-                "",
-            };
-          })
+  const assignmentGroups = useMemo<AssignmentGroup[]>(() => {
+    return assignments
+      .filter(
+        (assignment) =>
+          subjectFilter === "All Subjects" ||
+          assignment.subject === subjectFilter
+      )
+      .map((assignment) => {
+        const assignmentStatuses = statuses
           .filter(
-            (
-              item
-            ): item is WaitingItem =>
-              item !== null
+            (status) =>
+              status.assignmentId === assignment.id
           )
-          .sort((a, b) => {
-            const subjectCompare =
-              a.subject.localeCompare(
-                b.subject
-              );
+          .filter(
+            (status) =>
+              !showOnlyWaiting ||
+              status.status === "turnedIn"
+          );
 
-            if (
-              subjectCompare !==
-              0
-            ) {
-              return subjectCompare;
-            }
-
-            const assignmentCompare =
-              a.assignmentTitle.localeCompare(
-                b.assignmentTitle
-              );
-
-            if (
-              assignmentCompare !==
-              0
-            ) {
-              return assignmentCompare;
-            }
-
-            return a.studentName.localeCompare(
-              b.studentName
-            );
-          });
-
-      setItems(
-        loadedItems
+        return {
+          assignment,
+          students: assignmentStatuses,
+        };
+      })
+      .filter(
+        (group) =>
+          !showOnlyWaiting ||
+          group.students.length > 0
       );
+  }, [
+    assignments,
+    statuses,
+    subjectFilter,
+    showOnlyWaiting,
+  ]);
 
-      const initialFeedback: Record<
-        string,
-        string
-      > = {};
+  const waitingStatuses = useMemo(
+    () =>
+      statuses.filter(
+        (status) => status.status === "turnedIn"
+      ),
+    [statuses]
+  );
 
-      loadedItems.forEach(
-        (item) => {
-          initialFeedback[
-            item.statusId
-          ] =
-            item.feedback ||
-            "";
-        }
-      );
+  const selectedWaitingCount = selectedStatusIds.filter(
+    (statusId) =>
+      waitingStatuses.some(
+        (status) => status.statusId === statusId
+      )
+  ).length;
 
-      setFeedbackById(
-        initialFeedback
-      );
-    } catch (error) {
-      console.error(
-        "LOAD CHECKER ERROR:",
-        error
-      );
+  function toggleSelected(statusId: string) {
+    setSelectedStatusIds((current) =>
+      current.includes(statusId)
+        ? current.filter((id) => id !== statusId)
+        : [...current, statusId]
+    );
+  }
 
-      throw error;
-    }
+  function selectAllWaiting() {
+    setSelectedStatusIds(
+      waitingStatuses.map(
+        (status) => status.statusId
+      )
+    );
+  }
+
+  function clearSelection() {
+    setSelectedStatusIds([]);
   }
 
   async function verifyItem(
-    item: WaitingItem
+    item: StatusRecord
   ) {
     try {
-      setWorkingId(
-        item.statusId
-      );
-
-      setItemMessageById(
-        (current) => ({
-          ...current,
-          [item.statusId]:
-            "Verifying...",
-        })
-      );
+      setWorkingId(item.statusId);
+      setMessage("");
 
       await updateDoc(
         doc(
@@ -367,522 +322,429 @@ export default function TeacherCheckerPage() {
           item.statusId
         ),
         {
-          status:
-            "verified",
-
-          feedback:
-            "",
-
-          verifiedAt:
-            serverTimestamp(),
-
+          status: "verified",
+          feedback: "",
+          verifiedAt: serverTimestamp(),
           verifiedBy:
-            auth.currentUser
-              ?.uid ||
-            "",
+            auth.currentUser?.uid || "",
         }
       );
 
-      setItems(
-        (current) =>
-          current.filter(
-            (currentItem) =>
-              currentItem.statusId !==
-              item.statusId
-          )
+      setStatuses((current) =>
+        current.map((status) =>
+          status.statusId === item.statusId
+            ? {
+                ...status,
+                status: "verified",
+                feedback: "",
+              }
+            : status
+        )
       );
 
-      setMessage(
-        `${item.studentName}'s assignment was verified.`
+      setSelectedStatusIds((current) =>
+        current.filter(
+          (id) => id !== item.statusId
+        )
       );
     } catch (error) {
-      console.error(
-        "VERIFY ERROR:",
-        error
-      );
+      console.error(error);
 
-      setItemMessageById(
-        (current) => ({
-          ...current,
-          [item.statusId]:
-            "HawkTrack couldn't verify this assignment.",
-        })
+      setMessage(
+        "HawkTrack couldn't verify that assignment."
       );
     } finally {
-      setWorkingId(
-        null
-      );
+      setWorkingId(null);
     }
   }
 
-  async function sendBackItem(
-    item: WaitingItem
-  ) {
-    const feedback =
-      feedbackById[
-        item.statusId
-      ]?.trim() ||
-      "";
-
-    // CLEAR OLD INLINE MESSAGE
-    setItemMessageById(
-      (current) => ({
-        ...current,
-        [item.statusId]:
-          "",
-      })
+  async function verifySelected() {
+    const selected = waitingStatuses.filter(
+      (status) =>
+        selectedStatusIds.includes(
+          status.statusId
+        )
     );
 
-    // REQUIRE FEEDBACK
-    if (!feedback) {
-      setItemMessageById(
-        (current) => ({
-          ...current,
-          [item.statusId]:
-            "⚠️ Add feedback explaining what needs to be fixed before sending it back.",
-        })
+    if (selected.length === 0) {
+      setMessage(
+        "Select at least one turned-in assignment first."
       );
-
       return;
     }
 
     try {
-      setWorkingId(
-        item.statusId
+      setWorkingId("bulk");
+      setMessage("");
+
+      const batch = writeBatch(db);
+
+      selected.forEach((status) => {
+        batch.update(
+          doc(
+            db,
+            "studentAssignmentStatus",
+            status.statusId
+          ),
+          {
+            status: "verified",
+            feedback: "",
+            verifiedAt: serverTimestamp(),
+            verifiedBy:
+              auth.currentUser?.uid || "",
+          }
+        );
+      });
+
+      await batch.commit();
+
+      const selectedIds = new Set(
+        selected.map(
+          (status) => status.statusId
+        )
       );
 
-      // SHOW IMMEDIATE VISIBLE RESPONSE
-      setItemMessageById(
-        (current) => ({
-          ...current,
-          [item.statusId]:
-            `Sending ${item.studentName}'s assignment back...`,
-        })
+      setStatuses((current) =>
+        current.map((status) =>
+          selectedIds.has(status.statusId)
+            ? {
+                ...status,
+                status: "verified",
+                feedback: "",
+              }
+            : status
+        )
       );
 
-      const statusRef =
+      setSelectedStatusIds([]);
+      setMessage(
+        `${selected.length} assignment${
+          selected.length === 1 ? "" : "s"
+        } verified.`
+      );
+    } catch (error) {
+      console.error(error);
+      setMessage(
+        "HawkTrack couldn't verify the selected assignments."
+      );
+    } finally {
+      setWorkingId(null);
+    }
+  }
+
+  async function sendBackItem(
+    item: StatusRecord
+  ) {
+    const feedback =
+      feedbackById[item.statusId]?.trim() || "";
+
+    if (!feedback) {
+      setMessage(
+        `Add a reason before sending ${item.studentName}'s work back.`
+      );
+      return;
+    }
+
+    try {
+      setWorkingId(item.statusId);
+      setMessage("");
+
+      await updateDoc(
         doc(
           db,
           "studentAssignmentStatus",
           item.statusId
-        );
-
-      await updateDoc(
-        statusRef,
+        ),
         {
-          status:
-            "todo",
-
+          status: "todo",
           feedback,
-
-          verifiedAt:
-            null,
-
-          verifiedBy:
-            "",
-
-          returnedAt:
-            serverTimestamp(),
-
+          verifiedAt: null,
+          verifiedBy: "",
+          returnedAt: serverTimestamp(),
           returnedBy:
-            auth.currentUser
-              ?.uid ||
-            "",
+            auth.currentUser?.uid || "",
         }
       );
 
-      // REMOVE FROM CHECKER INBOX
-      setItems(
-        (current) =>
-          current.filter(
-            (currentItem) =>
-              currentItem.statusId !==
-              item.statusId
-          )
+      setStatuses((current) =>
+        current.map((status) =>
+          status.statusId === item.statusId
+            ? {
+                ...status,
+                status: "todo",
+                feedback,
+              }
+            : status
+        )
       );
 
-      // CLEAN FEEDBACK STATE
-      setFeedbackById(
-        (current) => {
-          const copy = {
-            ...current,
-          };
-
-          delete copy[
-            item.statusId
-          ];
-
-          return copy;
-        }
-      );
-
-      setItemMessageById(
-        (current) => {
-          const copy = {
-            ...current,
-          };
-
-          delete copy[
-            item.statusId
-          ];
-
-          return copy;
-        }
-      );
-
-      setMessage(
-        `↩ ${item.studentName}'s assignment was sent back.`
+      setSelectedStatusIds((current) =>
+        current.filter(
+          (id) => id !== item.statusId
+        )
       );
     } catch (error) {
-      console.error(
-        "SEND BACK ERROR:",
-        error
-      );
+      console.error(error);
 
-      setItemMessageById(
-        (current) => ({
-          ...current,
-
-          [item.statusId]:
-            "❌ HawkTrack couldn't send this assignment back. Check the browser console for the error.",
-        })
+      setMessage(
+        "HawkTrack couldn't send that assignment back."
       );
     } finally {
-      setWorkingId(
-        null
-      );
+      setWorkingId(null);
     }
   }
 
-  const groupedItems =
-    useMemo(() => {
-      const groups: Record<
-        string,
-        WaitingItem[]
-      > = {};
-
-      items.forEach(
-        (item) => {
-          const key =
-            `${item.subject}|||${item.assignmentTitle}|||${item.assignmentId}`;
-
-          if (
-            !groups[key]
-          ) {
-            groups[key] =
-              [];
-          }
-
-          groups[
-            key
-          ].push(
-            item
-          );
-        }
-      );
-
-      return Object.entries(
-        groups
-      ).map(
-        (
-          [
-            key,
-            groupItems,
-          ]
-        ) => {
-          const first =
-            groupItems[0];
-
-          return {
-            key,
-
-            subject:
-              first.subject,
-
-            assignmentTitle:
-              first.assignmentTitle,
-
-            assignmentId:
-              first.assignmentId,
-
-            dueDate:
-              first.dueDate,
-
-            students:
-              groupItems,
-          };
-        }
-      );
-    }, [items]);
-
   async function handleLogout() {
-    await signOut(
-      auth
-    );
-
-    router.push(
-      "/teacher/login"
-    );
+    await signOut(auth);
+    router.push("/teacher/login");
   }
 
   if (loading) {
     return (
       <main className="min-h-screen bg-blue-50 flex items-center justify-center">
-
         <p className="text-xl font-bold text-blue-900">
-          Loading Checker
-          Inbox...
+          Loading Checker...
         </p>
-
       </main>
     );
   }
 
   return (
     <main className="min-h-screen bg-blue-50 p-4 md:p-8">
+      <div className="max-w-[1600px] mx-auto">
+        <TeacherNav />
 
-      <div className="max-w-[1500px] mx-auto">
-
-        {/* NAV */}
-        <nav className="bg-blue-900 rounded-2xl p-2 mb-6">
-
-          <div className="flex flex-wrap items-center gap-2">
-
-            <button
-              type="button"
-              onClick={() =>
-                router.push(
-                  "/teacher/dashboard"
-                )
-              }
-              className="text-white hover:bg-blue-800 px-5 py-3 rounded-xl font-bold"
-            >
-              🏠 Dashboard
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                router.push(
-                  "/teacher"
-                )
-              }
-              className="text-white hover:bg-blue-800 px-5 py-3 rounded-xl font-bold"
-            >
-              📅 Weekly Planner
-            </button>
-
-            <button
-              type="button"
-              className="bg-yellow-400 text-blue-950 px-5 py-3 rounded-xl font-bold"
-            >
-              ✅ Checker
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                router.push(
-                  "/teacher/behavior"
-                )
-              }
-              className="text-white hover:bg-blue-800 px-5 py-3 rounded-xl font-bold"
-            >
-              ⚡ Behavior
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                router.push(
-                  "/teacher/reports"
-                )
-              }
-              className="text-white hover:bg-blue-800 px-5 py-3 rounded-xl font-bold"
-            >
-              📊 Reports
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                router.push(
-                  "/teacher/classes"
-                )
-              }
-              className="text-white hover:bg-blue-800 px-5 py-3 rounded-xl font-bold"
-            >
-              🏫 Classes
-            </button>
-
-            <div className="hidden md:block flex-1" />
-
-            <p className="text-yellow-300 font-bold px-4">
-              HawkTrack
-            </p>
-
-          </div>
-
-        </nav>
-
-        {/* HEADER */}
         <header className="bg-white border-4 border-yellow-300 rounded-3xl p-6 mb-6">
-
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-
+          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
             <div>
-
               <p className="text-sm font-bold uppercase tracking-wide text-yellow-700">
                 HawkTrack
               </p>
 
               <h1 className="text-3xl font-bold text-blue-900">
-                Checker Inbox
+                Teacher Checker
               </h1>
 
               <p className="text-gray-600 mt-1">
-                Verify work or
-                send it back
-                with feedback.
+                See every assignment and every assigned student. Turned-in work can be checked individually or in a batch.
               </p>
-
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
-
               <div className="bg-yellow-100 text-yellow-900 rounded-2xl px-5 py-3 font-bold">
-                {
-                  items.length
-                }{" "}
-                waiting
+                {waitingStatuses.length} waiting
               </div>
 
               <button
                 type="button"
-                onClick={
-                  handleLogout
+                onClick={() =>
+                  router.push("/teacher/gradebook")
                 }
+                className="bg-white border-2 border-blue-300 text-blue-900 px-5 py-3 rounded-xl font-bold"
+              >
+                📚 Gradebook
+              </button>
+
+              <button
+                type="button"
+                onClick={handleLogout}
                 className="bg-blue-900 text-white px-5 py-3 rounded-xl font-bold"
               >
                 Log Out
               </button>
-
             </div>
-
           </div>
-
         </header>
 
-        {/* SUCCESS / GLOBAL MESSAGE */}
         {message && (
-          <div className="bg-blue-50 border-2 border-blue-200 rounded-2xl p-4 mb-6 text-blue-950 font-semibold">
-
-            {
-              message
-            }
-
+          <div className="bg-yellow-50 border-2 border-yellow-200 rounded-2xl p-4 mb-6 text-blue-950 font-semibold">
+            {message}
           </div>
         )}
 
-        {/* EMPTY */}
-        {items.length ===
-        0 ? (
-          <section className="bg-white border-2 border-green-200 rounded-3xl p-10 text-center">
+        <section className="bg-white border border-blue-200 rounded-3xl p-5 mb-6">
+          <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
+            <div className="flex flex-wrap gap-4">
+              <div>
+                <label className="block text-sm font-bold text-blue-900 mb-2">
+                  Subject
+                </label>
 
-            <p className="text-4xl">
-              🎉
-            </p>
+                <select
+                  value={subjectFilter}
+                  onChange={(e) =>
+                    setSubjectFilter(e.target.value)
+                  }
+                  className="border-2 border-blue-200 rounded-xl px-4 py-3 bg-white text-black"
+                >
+                  {subjects.map((subject) => (
+                    <option
+                      key={subject}
+                      value={subject}
+                    >
+                      {subject}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <h2 className="text-2xl font-bold text-green-800 mt-3">
-              Checker inbox
-              is empty!
+              <label className="flex items-center gap-3 mt-auto bg-blue-50 rounded-xl px-4 py-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showOnlyWaiting}
+                  onChange={(e) =>
+                    setShowOnlyWaiting(
+                      e.target.checked
+                    )
+                  }
+                />
+                <span className="font-bold text-blue-900">
+                  Show only waiting work
+                </span>
+              </label>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={selectAllWaiting}
+                className="border-2 border-blue-200 bg-white text-blue-900 rounded-xl px-4 py-3 font-bold"
+              >
+                Select All Waiting
+              </button>
+
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="border-2 border-gray-200 bg-white text-gray-700 rounded-xl px-4 py-3 font-bold"
+              >
+                Clear
+              </button>
+
+              <button
+                type="button"
+                onClick={verifySelected}
+                disabled={
+                  selectedWaitingCount === 0 ||
+                  workingId === "bulk"
+                }
+                className="bg-green-600 text-white rounded-xl px-5 py-3 font-bold disabled:opacity-50"
+              >
+                {workingId === "bulk"
+                  ? "Verifying..."
+                  : `✓ Verify Selected (${selectedWaitingCount})`}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {assignmentGroups.length === 0 ? (
+          <section className="bg-white border-2 border-dashed border-blue-200 rounded-3xl p-10 text-center">
+            <h2 className="text-2xl font-bold text-blue-900">
+              No assignments found
             </h2>
-
-            <p className="text-gray-600 mt-2">
-              There&apos;s
-              nothing waiting
-              for verification
-              right now.
-            </p>
-
           </section>
         ) : (
           <div className="space-y-6">
+            {assignmentGroups.map((group) => {
+              const waitingCount =
+                group.students.filter(
+                  (student) =>
+                    student.status === "turnedIn"
+                ).length;
 
-            {groupedItems.map(
-              (group) => (
+              const verifiedCount =
+                group.students.filter(
+                  (student) =>
+                    student.status === "verified" ||
+                    student.status === "excused"
+                ).length;
+
+              return (
                 <section
-                  key={
-                    group.key
-                  }
+                  key={group.assignment.id}
                   className="bg-white border-2 border-blue-200 rounded-3xl p-5 md:p-6"
                 >
-
-                  {/* ASSIGNMENT */}
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
-
+                  <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-5">
                     <div>
-
                       <p className="text-xs font-bold uppercase text-blue-700">
-                        {
-                          group.subject
-                        }
+                        {group.assignment.subject}
                       </p>
 
                       <h2 className="text-2xl font-bold text-blue-950">
-                        {
-                          group.assignmentTitle
-                        }
+                        {group.assignment.title}
                       </h2>
 
                       <p className="text-sm text-gray-500 mt-1">
                         Due{" "}
                         {formatDateLabel(
-                          group.dueDate
+                          group.assignment.dueDate
                         )}
                       </p>
-
                     </div>
 
-                    <div className="bg-blue-50 text-blue-900 rounded-full px-4 py-2 font-bold">
+                    <div className="flex flex-wrap gap-2">
+                      <span className="bg-green-100 text-green-800 rounded-full px-3 py-2 text-sm font-bold">
+                        {verifiedCount} finished
+                      </span>
 
-                      {
-                        group.students
-                          .length
-                      }{" "}
-                      waiting
+                      <span className="bg-yellow-100 text-yellow-800 rounded-full px-3 py-2 text-sm font-bold">
+                        {waitingCount} waiting
+                      </span>
 
+                      <span className="bg-blue-50 text-blue-800 rounded-full px-3 py-2 text-sm font-bold">
+                        {group.students.length} assigned
+                      </span>
                     </div>
-
                   </div>
 
-                  {/* STUDENTS */}
-                  <div className="space-y-4">
+                  {group.students.length === 0 ? (
+                    <div className="border-2 border-dashed border-blue-100 rounded-2xl p-5 text-gray-500">
+                      No matching students for this filter.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {group.students.map((item) => {
+                        const isWaiting =
+                          item.status === "turnedIn";
 
-                    {group.students.map(
-                      (item) => {
                         const isWorking =
-                          workingId ===
-                          item.statusId;
-
-                        const itemMessage =
-                          itemMessageById[
-                            item.statusId
-                          ];
+                          workingId === item.statusId;
 
                         return (
                           <div
-                            key={
-                              item.statusId
-                            }
-                            className="border-2 border-blue-100 rounded-2xl p-4"
+                            key={item.statusId}
+                            className={`border-2 rounded-2xl p-4 ${
+                              item.status === "verified"
+                                ? "border-green-200 bg-green-50"
+                                : item.status === "excused"
+                                ? "border-gray-200 bg-gray-50"
+                                : item.status === "turnedIn"
+                                ? "border-yellow-300 bg-yellow-50"
+                                : "border-blue-100 bg-white"
+                            }`}
                           >
+                            <div className="grid xl:grid-cols-[36px_220px_130px_1fr_170px] gap-4 items-start">
+                              <div className="pt-1">
+                                {isWaiting ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedStatusIds.includes(
+                                      item.statusId
+                                    )}
+                                    onChange={() =>
+                                      toggleSelected(
+                                        item.statusId
+                                      )
+                                    }
+                                    className="h-5 w-5"
+                                  />
+                                ) : (
+                                  <span className="block h-5 w-5" />
+                                )}
+                              </div>
 
-                            <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-
-                              {/* STUDENT */}
-                              <div className="min-w-[180px]">
-
+                              <div>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -892,146 +754,168 @@ export default function TeacherCheckerPage() {
                                   }
                                   className="font-bold text-blue-950 text-lg underline hover:text-blue-700"
                                 >
-                                  {
-                                    item.studentName
-                                  }
+                                  {item.studentName}
                                 </button>
-
-                                <p className="text-sm text-gray-500 mt-1">
-                                  Submitted
-                                  for checking
-                                </p>
-
                               </div>
 
-                              {/* FEEDBACK */}
-                              <div className="flex-1">
-
-                                <label className="block text-sm font-bold text-blue-900 mb-2">
-                                  Feedback if
-                                  sending back
-                                </label>
-
-                                <textarea
-                                  value={
-                                    feedbackById[
-                                      item
-                                        .statusId
-                                    ] ||
-                                    ""
+                              <div>
+                                <StatusBadge
+                                  status={item.status}
+                                  dueDate={
+                                    group.assignment.dueDate
                                   }
-                                  onChange={(
-                                    e
-                                  ) => {
-                                    setFeedbackById(
-                                      (
-                                        current
-                                      ) => ({
-                                        ...current,
-
-                                        [item.statusId]:
-                                          e
-                                            .target
-                                            .value,
-                                      })
-                                    );
-
-                                    setItemMessageById(
-                                      (
-                                        current
-                                      ) => ({
-                                        ...current,
-
-                                        [item.statusId]:
-                                          "",
-                                      })
-                                    );
-                                  }}
-                                  placeholder="Example: Finish questions 4–6 and turn it back in."
-                                  className="w-full border-2 border-blue-200 rounded-xl p-3 text-black min-h-20"
                                 />
+                              </div>
 
-                                {/* INLINE MESSAGE */}
-                                {itemMessage && (
-                                  <div
-                                    className={`mt-2 rounded-xl p-3 text-sm font-bold ${
-                                      itemMessage.includes(
-                                        "❌"
-                                      ) ||
-                                      itemMessage.includes(
-                                        "⚠️"
-                                      )
-                                        ? "bg-red-50 text-red-700 border border-red-200"
-                                        : "bg-blue-50 text-blue-800 border border-blue-200"
-                                    }`}
-                                  >
-                                    {
-                                      itemMessage
-                                    }
-                                  </div>
+                              <div>
+                                {isWaiting ? (
+                                  <>
+                                    <label className="block text-sm font-bold text-blue-900 mb-2">
+                                      Feedback if sending back
+                                    </label>
+
+                                    <textarea
+                                      value={
+                                        feedbackById[
+                                          item.statusId
+                                        ] || ""
+                                      }
+                                      onChange={(e) =>
+                                        setFeedbackById(
+                                          (current) => ({
+                                            ...current,
+                                            [item.statusId]:
+                                              e.target.value,
+                                          })
+                                        )
+                                      }
+                                      placeholder="Example: Finish questions 4–6 and turn it back in."
+                                      className="w-full border-2 border-blue-200 rounded-xl p-3 text-black min-h-20 bg-white"
+                                    />
+                                  </>
+                                ) : item.feedback ? (
+                                  <p className="text-sm text-red-700">
+                                    Note: {item.feedback}
+                                  </p>
+                                ) : (
+                                  <p className="text-sm text-gray-400">
+                                    —
+                                  </p>
                                 )}
-
                               </div>
 
-                              {/* ACTIONS */}
-                              <div className="flex flex-col sm:flex-row lg:flex-col gap-2 lg:min-w-[160px]">
+                              <div className="flex flex-col gap-2">
+                                {isWaiting ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        verifyItem(item)
+                                      }
+                                      disabled={isWorking}
+                                      className="bg-green-600 text-white rounded-xl px-4 py-3 font-bold disabled:opacity-50"
+                                    >
+                                      ✓ Verify
+                                    </button>
 
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    verifyItem(
-                                      item
-                                    )
-                                  }
-                                  disabled={
-                                    isWorking
-                                  }
-                                  className="bg-green-600 text-white rounded-xl px-5 py-3 font-bold disabled:opacity-50"
-                                >
-                                  {isWorking
-                                    ? "Working..."
-                                    : "✓ Verify"}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    sendBackItem(
-                                      item
-                                    )
-                                  }
-                                  disabled={
-                                    isWorking
-                                  }
-                                  className="bg-yellow-400 text-blue-950 rounded-xl px-5 py-3 font-bold disabled:opacity-50"
-                                >
-                                  {isWorking
-                                    ? "Sending..."
-                                    : "↩ Send Back"}
-                                </button>
-
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        sendBackItem(item)
+                                      }
+                                      disabled={isWorking}
+                                      className="bg-yellow-400 text-blue-950 rounded-xl px-4 py-3 font-bold disabled:opacity-50"
+                                    >
+                                      ↩ Send Back
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="text-sm text-gray-500 text-center py-3">
+                                    No checker action needed
+                                  </span>
+                                )}
                               </div>
-
                             </div>
-
                           </div>
                         );
-                      }
-                    )}
-
-                  </div>
-
+                      })}
+                    </div>
+                  )}
                 </section>
-              )
-            )}
-
+              );
+            })}
           </div>
         )}
-
       </div>
-
     </main>
   );
+}
+
+function StatusBadge({
+  status,
+  dueDate,
+}: {
+  status:
+    | "todo"
+    | "turnedIn"
+    | "verified"
+    | "excused";
+  dueDate: string;
+}) {
+  const overdue =
+    status === "todo" &&
+    dueDate &&
+    dueDate < formatDateForInput(new Date());
+
+  if (status === "verified") {
+    return (
+      <span className="inline-block bg-green-100 text-green-800 rounded-full px-3 py-1 text-sm font-bold">
+        ✓ Verified
+      </span>
+    );
+  }
+
+  if (status === "excused") {
+    return (
+      <span className="inline-block bg-gray-200 text-gray-700 rounded-full px-3 py-1 text-sm font-bold">
+        Excused
+      </span>
+    );
+  }
+
+  if (status === "turnedIn") {
+    return (
+      <span className="inline-block bg-yellow-100 text-yellow-800 rounded-full px-3 py-1 text-sm font-bold">
+        Waiting
+      </span>
+    );
+  }
+
+  if (overdue) {
+    return (
+      <span className="inline-block bg-red-100 text-red-700 rounded-full px-3 py-1 text-sm font-bold">
+        Overdue
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-block bg-blue-100 text-blue-800 rounded-full px-3 py-1 text-sm font-bold">
+      To Do
+    </span>
+  );
+}
+
+function formatDateForInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(
+    date.getMonth() + 1
+  ).padStart(2, "0");
+  const day = String(
+    date.getDate()
+  ).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 function formatDateLabel(
@@ -1041,11 +925,7 @@ function formatDateLabel(
     return "—";
   }
 
-  const [
-    year,
-    month,
-    day,
-  ] =
+  const [year, month, day] =
     dateString
       .split("-")
       .map(Number);
@@ -1058,14 +938,9 @@ function formatDateLabel(
   ).toLocaleDateString(
     "en-US",
     {
-      month:
-        "short",
-
-      day:
-        "numeric",
-
-      year:
-        "numeric",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
     }
   );
 }

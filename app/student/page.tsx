@@ -12,6 +12,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   serverTimestamp,
   updateDoc,
@@ -52,10 +53,11 @@ type Support = {
   id: string;
   studentId: string;
   name: string;
-  type: "dailyAllowance" | "weeklyGoal";
+  type: "dailyAllowance" | "weeklyGoal" | "bathroomTimer";
   description: string;
   target: number;
   reward: string;
+  goalMinutes: number;
   studentCanTrack: boolean;
   active: boolean;
 };
@@ -66,6 +68,17 @@ type SupportProgress = {
   supportId: string;
   periodKey: string;
   count: number;
+};
+
+type BathroomTrip = {
+  id: string;
+  studentId: string;
+  supportId: string;
+  startedAtMs: number;
+  endedAtMs: number | null;
+  durationSeconds: number | null;
+  goalSeconds: number;
+  success: boolean | null;
 };
 
 export default function StudentPage() {
@@ -91,6 +104,11 @@ export default function StudentPage() {
 
   const [supportUpdatingId, setSupportUpdatingId] =
     useState<string | null>(null);
+
+  const [bathroomTrips, setBathroomTrips] =
+    useState<BathroomTrip[]>([]);
+
+  const [timerNow, setTimerNow] = useState(Date.now());
 
   const [goalText, setGoalText] =
     useState("");
@@ -159,6 +177,10 @@ export default function StudentPage() {
           );
 
           await loadSupportsAndProgress(
+            user.uid
+          );
+
+          await loadBathroomTrips(
             user.uid
           );
         } catch (error) {
@@ -416,10 +438,13 @@ export default function StudentPage() {
           type:
             data.type === "weeklyGoal"
               ? "weeklyGoal"
+              : data.type === "bathroomTimer"
+              ? "bathroomTimer"
               : "dailyAllowance",
           description: data.description || "",
           target: Number(data.target) || 1,
           reward: data.reward || "",
+          goalMinutes: Number(data.goalMinutes) || 5,
           studentCanTrack: data.studentCanTrack !== false,
           active: data.active !== false,
         } as Support;
@@ -452,10 +477,202 @@ export default function StudentPage() {
     setSupportProgress(loadedProgress);
   }
 
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setTimerNow(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  // Keep support progress and bathroom trips synced with the teacher account.
+  useEffect(() => {
+    if (!studentId) return;
+
+    const progressQuery = query(
+      collection(db, "supportProgress"),
+      where("studentId", "==", studentId)
+    );
+
+    const tripsQuery = query(
+      collection(db, "bathroomTrips"),
+      where("studentId", "==", studentId)
+    );
+
+    const unsubscribeProgress = onSnapshot(
+      progressQuery,
+      (snapshot) => {
+        setSupportProgress(
+          snapshot.docs.map((progressDoc) => {
+            const data = progressDoc.data();
+            return {
+              id: progressDoc.id,
+              studentId: data.studentId || studentId,
+              supportId: data.supportId || "",
+              periodKey: data.periodKey || "",
+              count: Number(data.count) || 0,
+            };
+          })
+        );
+      },
+      (error) => console.error("Support progress sync failed:", error)
+    );
+
+    const unsubscribeTrips = onSnapshot(
+      tripsQuery,
+      (snapshot) => {
+        setBathroomTrips(
+          snapshot.docs.map((tripDoc) => {
+            const data = tripDoc.data();
+            return {
+              id: tripDoc.id,
+              studentId: data.studentId || studentId,
+              supportId: data.supportId || "",
+              startedAtMs: Number(data.startedAtMs) || 0,
+              endedAtMs: data.endedAtMs == null ? null : Number(data.endedAtMs),
+              durationSeconds:
+                data.durationSeconds == null ? null : Number(data.durationSeconds),
+              goalSeconds: Number(data.goalSeconds) || 300,
+              success: typeof data.success === "boolean" ? data.success : null,
+            };
+          })
+        );
+      },
+      (error) => console.error("Bathroom trip sync failed:", error)
+    );
+
+    return () => {
+      unsubscribeProgress();
+      unsubscribeTrips();
+    };
+  }, [studentId]);
+
+  async function loadBathroomTrips(currentStudentId: string) {
+    const snapshot = await getDocs(
+      query(
+        collection(db, "bathroomTrips"),
+        where("studentId", "==", currentStudentId)
+      )
+    );
+
+    const trips: BathroomTrip[] = snapshot.docs.map((tripDoc) => {
+      const data = tripDoc.data();
+      return {
+        id: tripDoc.id,
+        studentId: data.studentId || currentStudentId,
+        supportId: data.supportId || "",
+        startedAtMs: Number(data.startedAtMs) || 0,
+        endedAtMs: data.endedAtMs == null ? null : Number(data.endedAtMs),
+        durationSeconds:
+          data.durationSeconds == null ? null : Number(data.durationSeconds),
+        goalSeconds: Number(data.goalSeconds) || 300,
+        success: typeof data.success === "boolean" ? data.success : null,
+      };
+    });
+
+    setBathroomTrips(trips);
+  }
+
+  function getActiveBathroomTrip(supportId: string) {
+    return (
+      bathroomTrips.find(
+        (trip) => trip.supportId === supportId && trip.endedAtMs === null
+      ) || null
+    );
+  }
+
+  async function startBathroomTimer(support: Support) {
+    if (!student || getActiveBathroomTrip(support.id)) return;
+
+    try {
+      setSupportUpdatingId(support.id);
+      setMessage("");
+
+      const startedAtMs = Date.now();
+      const goalSeconds = Math.max(1, support.goalMinutes || 5) * 60;
+
+      const tripRef = await addDoc(collection(db, "bathroomTrips"), {
+        studentId,
+        classId: student.classId,
+        supportId: support.id,
+        startedAtMs,
+        endedAtMs: null,
+        durationSeconds: null,
+        goalSeconds,
+        success: null,
+        createdAt: serverTimestamp(),
+      });
+
+      setBathroomTrips((items) => [
+        ...items,
+        {
+          id: tripRef.id,
+          studentId,
+          supportId: support.id,
+          startedAtMs,
+          endedAtMs: null,
+          durationSeconds: null,
+          goalSeconds,
+          success: null,
+        },
+      ]);
+    } catch (error) {
+      console.error(error);
+      setMessage("HawkTrack couldn't start the bathroom timer.");
+    } finally {
+      setSupportUpdatingId(null);
+    }
+  }
+
+  async function finishBathroomTimer(support: Support) {
+    const activeTrip = getActiveBathroomTrip(support.id);
+    if (!activeTrip || !student) return;
+
+    try {
+      setSupportUpdatingId(support.id);
+      setMessage("");
+
+      const endedAtMs = Date.now();
+      const durationSeconds = Math.max(
+        0,
+        Math.floor((endedAtMs - activeTrip.startedAtMs) / 1000)
+      );
+      const success = durationSeconds <= activeTrip.goalSeconds;
+
+      await updateDoc(doc(db, "bathroomTrips", activeTrip.id), {
+        endedAtMs,
+        durationSeconds,
+        success,
+        updatedAt: serverTimestamp(),
+      });
+
+      setBathroomTrips((items) =>
+        items.map((trip) =>
+          trip.id === activeTrip.id
+            ? { ...trip, endedAtMs, durationSeconds, success }
+            : trip
+        )
+      );
+
+      if (success) {
+        await changeSupportProgress(support, 1);
+      }
+    } catch (error) {
+      console.error(error);
+      setMessage("HawkTrack couldn't stop the bathroom timer.");
+    } finally {
+      setSupportUpdatingId(null);
+    }
+  }
+
   function getSupportPeriodKey(support: Support) {
-    return support.type === "dailyAllowance"
-      ? formatDateForInput(new Date())
-      : getWeekStartString();
+    if (support.type === "dailyAllowance") {
+      return formatDateForInput(new Date());
+    }
+    if (support.type === "bathroomTimer") {
+      return "currentCycle";
+    }
+    return getWeekStartString();
   }
 
   function getCurrentSupportProgress(support: Support) {
@@ -1270,6 +1487,119 @@ export default function StudentPage() {
                   Math.round((count / support.target) * 100)
                 );
 
+                if (support.type === "bathroomTimer") {
+                  const activeTrip = getActiveBathroomTrip(support.id);
+                  const elapsedSeconds = activeTrip
+                    ? Math.max(0, Math.floor((timerNow - activeTrip.startedAtMs) / 1000))
+                    : 0;
+                  const goalSeconds = Math.max(1, support.goalMinutes || 5) * 60;
+                  const remainingSeconds = Math.max(0, goalSeconds - elapsedSeconds);
+                  const overBySeconds = Math.max(0, elapsedSeconds - goalSeconds);
+                  const onTime = !activeTrip || elapsedSeconds <= goalSeconds;
+
+                  return (
+                    <div
+                      key={support.id}
+                      className={`border-2 rounded-2xl p-5 ${
+                        complete
+                          ? "bg-green-50 border-green-300"
+                          : activeTrip && !onTime
+                          ? "bg-red-50 border-red-300"
+                          : "bg-sky-50 border-sky-200"
+                      }`}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-wide text-sky-700">
+                            Bathroom Timer
+                          </p>
+                          <h3 className="text-xl font-bold text-blue-950 mt-1">
+                            {support.name}
+                          </h3>
+                          {support.description && (
+                            <p className="text-gray-600 mt-2">{support.description}</p>
+                          )}
+                          <p className="mt-3 font-semibold text-gray-700">
+                            Goal: back within {support.goalMinutes || 5} minute
+                            {(support.goalMinutes || 5) === 1 ? "" : "s"}
+                          </p>
+                          {support.reward && (
+                            <div className="mt-3 bg-white rounded-xl p-3 border border-sky-200">
+                              <p className="text-xs font-bold uppercase text-sky-700">
+                                Reward after {support.target} successful trips
+                              </p>
+                              <p className="font-semibold text-blue-950 mt-1">
+                                {support.reward}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="bg-white rounded-2xl px-5 py-4 text-center border border-sky-200 min-w-40">
+                          <p className="text-3xl font-bold text-blue-900">
+                            {count} / {support.target}
+                          </p>
+                          <p className="text-xs font-semibold text-gray-500">
+                            successful trips
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 h-4 bg-white rounded-full overflow-hidden border border-sky-200">
+                        <div
+                          className={complete ? "h-full bg-green-500" : "h-full bg-yellow-400"}
+                          style={{ width: `${percent}%` }}
+                        />
+                      </div>
+
+                      {activeTrip ? (
+                        <div className={`mt-5 rounded-2xl p-5 text-center ${
+                          onTime ? "bg-white border-2 border-sky-300" : "bg-white border-2 border-red-300"
+                        }`}>
+                          <p className="text-sm font-bold uppercase text-gray-500">
+                            {onTime ? "Time Left" : "Past Goal By"}
+                          </p>
+                          <p className={`text-5xl font-black mt-2 ${
+                            onTime ? "text-blue-900" : "text-red-600"
+                          }`}>
+                            {formatTimer(onTime ? remainingSeconds : overBySeconds)}
+                          </p>
+                          <p className="text-gray-600 mt-2">
+                            Timer keeps running even if you leave this page.
+                          </p>
+                          <button
+                            onClick={() => finishBathroomTimer(support)}
+                            disabled={supportUpdatingId === support.id}
+                            className="mt-4 bg-blue-900 text-white rounded-xl px-7 py-4 font-bold text-lg disabled:opacity-40"
+                          >
+                            {supportUpdatingId === support.id ? "Saving..." : "I’m Back"}
+                          </button>
+                        </div>
+                      ) : complete ? (
+                        <div className="mt-5 bg-green-100 rounded-xl p-4 text-green-800 font-bold text-center">
+                          🎉 Reward earned!
+                          {support.reward ? ` ${support.reward}` : ""}
+                        </div>
+                      ) : (
+                        <div className="mt-5">
+                          <button
+                            onClick={() => startBathroomTimer(support)}
+                            disabled={supportUpdatingId === support.id}
+                            className="bg-blue-900 text-white rounded-xl px-7 py-4 font-bold text-lg disabled:opacity-40"
+                          >
+                            {supportUpdatingId === support.id
+                              ? "Starting..."
+                              : "Start Bathroom Timer"}
+                          </button>
+                          <p className="text-sm text-gray-500 mt-2">
+                            Start this right when you leave for the bathroom.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
                 if (support.type === "dailyAllowance") {
                   return (
                     <div
@@ -1460,6 +1790,12 @@ export default function StudentPage() {
       </div>
     </main>
   );
+}
+
+function formatTimer(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function getStatusCompletedDate(
