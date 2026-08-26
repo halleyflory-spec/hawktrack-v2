@@ -81,6 +81,12 @@ type BathroomTrip = {
   success: boolean | null;
 };
 
+type StudentBehaviorStrike = {
+  id: string;
+  dateKey: string;
+  weekKey: string;
+};
+
 export default function StudentPage() {
   const router = useRouter();
 
@@ -107,6 +113,9 @@ export default function StudentPage() {
 
   const [bathroomTrips, setBathroomTrips] =
     useState<BathroomTrip[]>([]);
+
+  const [behaviorStrikes, setBehaviorStrikes] =
+    useState<StudentBehaviorStrike[]>([]);
 
   const [timerNow, setTimerNow] = useState(Date.now());
 
@@ -170,22 +179,16 @@ export default function StudentPage() {
               false,
           });
 
-          await loadSchoolwork(
-            user.uid
-          );
-
-          await loadWeeklyGoal(
-            user.uid,
-            data.classId
-          );
-
-          await loadSupportsAndProgress(
-            user.uid
-          );
-
-          await loadBathroomTrips(
-            user.uid
-          );
+          await Promise.all([
+            loadSchoolwork(user.uid),
+            loadWeeklyGoal(
+              user.uid,
+              data.classId
+            ),
+            loadSupports(
+              user.uid
+            ),
+          ]);
         } catch (error) {
           console.error(error);
 
@@ -228,97 +231,106 @@ export default function StudentPage() {
     const currentWeekStart =
       getWeekStartString();
 
-    const items: SchoolworkItem[] =
-      [];
+    const itemResults = await Promise.all(
+      statusSnapshot.docs.map(
+        async (statusDoc) => {
+          const statusData =
+            statusDoc.data();
 
-    for (
-      const statusDoc
-      of statusSnapshot.docs
-    ) {
-      const statusData =
-        statusDoc.data();
+          const assignmentSnapshot =
+            await getDoc(
+              doc(
+                db,
+                "assignments",
+                statusData.assignmentId
+              )
+            );
 
-      const assignmentSnapshot =
-        await getDoc(
-          doc(
-            db,
-            "assignments",
-            statusData.assignmentId
-          )
-        );
+          if (
+            !assignmentSnapshot.exists()
+          ) {
+            return null;
+          }
 
-      if (
-        !assignmentSnapshot.exists()
-      ) {
-        continue;
-      }
+          const assignmentData =
+            assignmentSnapshot.data();
 
-      const assignmentData =
-        assignmentSnapshot.data();
+          if (
+            assignmentData.showDate >
+            today
+          ) {
+            return null;
+          }
 
-      if (
-        assignmentData.showDate >
-        today
-      ) {
-        continue;
-      }
+          if (
+            assignmentData.archived ===
+            true
+          ) {
+            return null;
+          }
 
-      if (
-        assignmentData.archived ===
-        true
-      ) {
-        continue;
-      }
+          const status:
+            SchoolworkItem["status"] =
+              statusData.status ||
+              "todo";
 
-      const status =
-        statusData.status ||
-        "todo";
+          // Weekly rollover behavior:
+          // - To do / overdue work stays until it is finished.
+          // - Turned-in work stays until a checker handles it.
+          // - Verified / excused work stays visible for the week it was
+          //   completed, then drops off the active student screen.
+          if (
+            status === "verified" ||
+            status === "excused"
+          ) {
+            const completedDate =
+              getStatusCompletedDate(
+                statusData,
+                assignmentData.showDate || ""
+              );
 
-      // Weekly rollover behavior:
-      // - To do / overdue work stays until it is finished.
-      // - Turned-in work stays until a checker handles it.
-      // - Verified / excused work stays visible for the week it was
-      //   completed, then drops off the active student screen.
-      if (
-        status === "verified" ||
-        status === "excused"
-      ) {
-        const completedDate =
-          getStatusCompletedDate(
-            statusData,
-            assignmentData.showDate || ""
-          );
+            if (
+              completedDate <
+              currentWeekStart
+            ) {
+              return null;
+            }
+          }
 
-        if (
-          completedDate <
-          currentWeekStart
-        ) {
-          continue;
+          const item: SchoolworkItem = {
+            statusId:
+              statusDoc.id,
+            assignmentId:
+              assignmentSnapshot.id,
+            title:
+              assignmentData.title,
+            subject:
+              assignmentData.subject,
+            description:
+              assignmentData.description ||
+              "",
+            showDate:
+              assignmentData.showDate,
+            dueDate:
+              assignmentData.dueDate,
+            status,
+            feedback:
+              statusData.feedback ||
+              "",
+          };
+
+          return item;
         }
-      }
+      )
+    );
 
-      items.push({
-        statusId:
-          statusDoc.id,
-        assignmentId:
-          assignmentSnapshot.id,
-        title:
-          assignmentData.title,
-        subject:
-          assignmentData.subject,
-        description:
-          assignmentData.description ||
-          "",
-        showDate:
-          assignmentData.showDate,
-        dueDate:
-          assignmentData.dueDate,
-        status,
-        feedback:
-          statusData.feedback ||
-          "",
-      });
-    }
+    const items: SchoolworkItem[] =
+      itemResults.filter(
+        (
+          item
+        ): item is SchoolworkItem =>
+          item !== null
+      );
 
     items.sort((a, b) => {
       const aOverdue =
@@ -420,7 +432,7 @@ export default function StudentPage() {
     });
   }
 
-  async function loadSupportsAndProgress(
+  async function loadSupports(
     currentStudentId: string
   ) {
     const supportSnapshot = await getDocs(
@@ -459,27 +471,8 @@ export default function StudentPage() {
 
     setSupports(loadedSupports);
 
-    const progressSnapshot = await getDocs(
-      query(
-        collection(db, "supportProgress"),
-        where("studentId", "==", currentStudentId)
-      )
-    );
-
-    const loadedProgress: SupportProgress[] =
-      progressSnapshot.docs.map((progressDoc) => {
-        const data = progressDoc.data();
-
-        return {
-          id: progressDoc.id,
-          studentId: data.studentId,
-          supportId: data.supportId,
-          periodKey: data.periodKey,
-          count: Number(data.count) || 0,
-        };
-      });
-
-    setSupportProgress(loadedProgress);
+    // supportProgress is populated by the real-time listener below,
+    // so we don't block initial page loading with a duplicate fetch.
   }
 
   useEffect(() => {
@@ -501,6 +494,11 @@ export default function StudentPage() {
 
     const tripsQuery = query(
       collection(db, "bathroomTrips"),
+      where("studentId", "==", studentId)
+    );
+
+    const behaviorQuery = query(
+      collection(db, "behaviorLogs"),
       where("studentId", "==", studentId)
     );
 
@@ -546,9 +544,32 @@ export default function StudentPage() {
       (error) => console.error("Bathroom trip sync failed:", error)
     );
 
+    const unsubscribeBehavior = onSnapshot(
+      behaviorQuery,
+      (snapshot) => {
+        setBehaviorStrikes(
+          snapshot.docs.map((behaviorDoc) => {
+            const data = behaviorDoc.data();
+
+            return {
+              id: behaviorDoc.id,
+              dateKey: data.dateKey || "",
+              weekKey: data.weekKey || "",
+            };
+          })
+        );
+      },
+      (error) =>
+        console.error(
+          "Behavior strike sync failed:",
+          error
+        )
+    );
+
     return () => {
       unsubscribeProgress();
       unsubscribeTrips();
+      unsubscribeBehavior();
     };
   }, [studentId]);
 
@@ -989,6 +1010,35 @@ export default function StudentPage() {
     router.push("/");
   }
 
+  const todayKey = formatDateForInput(
+    new Date()
+  );
+
+  const currentWeekKey =
+    getWeekStartString();
+
+  const todayStrikeCount = useMemo(
+    () =>
+      behaviorStrikes.filter(
+        (strike) =>
+          strike.dateKey === todayKey
+      ).length,
+    [behaviorStrikes, todayKey]
+  );
+
+  const weekStrikeCount = useMemo(
+    () =>
+      behaviorStrikes.filter(
+        (strike) =>
+          strike.weekKey ===
+          currentWeekKey
+      ).length,
+    [
+      behaviorStrikes,
+      currentWeekKey,
+    ]
+  );
+
   const activeSchoolwork = useMemo(
     () =>
       schoolwork.filter(
@@ -1121,6 +1171,73 @@ export default function StudentPage() {
             {message}
           </div>
         )}
+
+        <section className="bg-white rounded-3xl border border-red-100 p-6 mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-red-600">
+                My Behavior
+              </p>
+
+              <h2 className="text-2xl font-bold text-blue-900 mt-1">
+                Strikes
+              </h2>
+
+              <p className="text-gray-600 mt-1">
+                Just a quick look at your counts — no behavior details are shown here.
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <div className="bg-red-50 border-2 border-red-200 rounded-2xl px-5 py-4 text-center min-w-28">
+                <p className="text-3xl font-black text-red-600">
+                  {todayStrikeCount}
+                </p>
+                <p className="text-xs font-bold text-red-700 mt-1">
+                  today
+                </p>
+              </div>
+
+              <div className="bg-yellow-50 border-2 border-yellow-200 rounded-2xl px-5 py-4 text-center min-w-28">
+                <p className="text-3xl font-black text-yellow-700">
+                  {weekStrikeCount}
+                </p>
+                <p className="text-xs font-bold text-yellow-800 mt-1">
+                  this week
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-2">
+            {Array.from({
+              length: Math.min(
+                todayStrikeCount,
+                10
+              ),
+            }).map((_, index) => (
+              <span
+                key={index}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-red-100 border-2 border-red-300 text-red-700 font-black"
+                aria-label={`Strike ${index + 1}`}
+              >
+                ✕
+              </span>
+            ))}
+
+            {todayStrikeCount === 0 && (
+              <span className="text-sm font-semibold text-green-700 bg-green-50 border border-green-200 rounded-full px-4 py-2">
+                No strikes today ✓
+              </span>
+            )}
+
+            {todayStrikeCount > 10 && (
+              <span className="text-sm font-bold text-red-700">
+                +{todayStrikeCount - 10} more
+              </span>
+            )}
+          </div>
+        </section>
 
         <section className="bg-white rounded-3xl border border-blue-100 p-6 mb-6">
 
